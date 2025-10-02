@@ -273,6 +273,288 @@ app.post('/api/payapp/cancel', async (req, res) => {
   }
 });
 
+// ==================== 정기결제 API ====================
+
+// 정기결제 등록
+app.post('/api/payapp/rebill/register', async (req, res) => {
+  try {
+    const { 
+      goodname, 
+      goodprice, 
+      recvphone, 
+      recvemail,
+      memo,
+      rebillCycleType,
+      rebillCycleMonth,
+      rebillCycleWeek,
+      rebillExpire,
+      var1,
+      var2,
+      openpaytype
+    } = req.body;
+    
+    // 필수 필드 검증
+    if (!goodname || !goodprice || !recvphone || !rebillCycleType || !rebillExpire) {
+      return res.status(400).json({
+        success: false,
+        message: '필수 필드가 누락되었습니다: goodname, goodprice, recvphone, rebillCycleType, rebillExpire'
+      });
+    }
+
+    // 주문 ID 생성
+    const orderId = var1 || `REBILL_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // PayApp 정기결제 등록 API 호출
+    const rebillData = new URLSearchParams({
+      cmd: 'rebillRegist',
+      userid: PAYAPP_CONFIG.USERID,
+      goodname: goodname,
+      goodprice: goodprice.toString(),
+      recvphone: recvphone,
+      recvemail: recvemail || '',
+      memo: memo || '',
+      rebillCycleType: rebillCycleType, // Month, Week, Day
+      rebillCycleMonth: rebillCycleMonth || '',
+      rebillCycleWeek: rebillCycleWeek || '',
+      rebillExpire: rebillExpire, // yyyy-mm-dd
+      feedbackurl: process.env.PAYAPP_FEEDBACK_URL || `${req.protocol}://${req.get('host')}/api/payapp/callback`,
+      var1: orderId,
+      var2: var2 || '',
+      smsuse: 'n',
+      openpaytype: openpaytype || '', // card, phone
+      returnurl: ''
+    });
+
+    console.log('PayApp 정기결제 등록 요청:', rebillData.toString());
+
+    const rebillResponse = await axios.post(PAYAPP_CONFIG.API_URL, rebillData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/html,application/xhtml+xml,*/*',
+        'Accept-Language': 'ko-KR'
+      },
+      timeout: 30000
+    });
+
+    console.log('PayApp 정기결제 등록 응답:', rebillResponse.data);
+
+    const responseData = new URLSearchParams(rebillResponse.data);
+    const state = responseData.get('state');
+    
+    if (state === '1') {
+      const rebill_no = responseData.get('rebill_no');
+      const payurl = responseData.get('payurl');
+      
+      console.log('정기결제 등록 성공:', { orderId, rebill_no, payurl });
+      
+      res.json({
+        success: true,
+        orderId: orderId,
+        rebillNo: rebill_no,
+        payUrl: payurl,
+        message: '정기결제가 성공적으로 등록되었습니다.'
+      });
+    } else {
+      const errorMessage = responseData.get('errorMessage');
+      const errno = responseData.get('errno');
+      
+      console.error('PayApp 정기결제 등록 오류:', { state, errorMessage, errno });
+      
+      res.status(400).json({
+        success: false,
+        message: errorMessage || '정기결제 등록에 실패했습니다.',
+        errorCode: errno,
+        state: state
+      });
+    }
+  } catch (error) {
+    console.error('정기결제 등록 오류:', error);
+    
+    if (error.response) {
+      console.error('PayApp API 응답 오류:', error.response.data);
+    } else if (error.request) {
+      console.error('PayApp API 요청 실패:', error.request);
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: '서버 내부 오류가 발생했습니다.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// 정기결제 해지
+app.post('/api/payapp/rebill/cancel', async (req, res) => {
+  try {
+    const { rebill_no } = req.body;
+    
+    if (!rebill_no) {
+      return res.status(400).json({
+        success: false,
+        message: '정기결제 등록번호(rebill_no)가 필요합니다.'
+      });
+    }
+
+    // PayApp 정기결제 해지 API 호출
+    const cancelData = new URLSearchParams({
+      cmd: 'rebillCancel',
+      userid: PAYAPP_CONFIG.USERID,
+      linkkey: PAYAPP_CONFIG.LINKKEY,
+      rebill_no: rebill_no
+    });
+
+    console.log('PayApp 정기결제 해지 요청:', cancelData.toString());
+
+    const cancelResponse = await axios.post(PAYAPP_CONFIG.API_URL, cancelData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    const responseData = new URLSearchParams(cancelResponse.data);
+    const state = responseData.get('state');
+    
+    if (state === '1') {
+      console.log('정기결제 해지 성공:', { rebill_no });
+      
+      res.json({
+        success: true,
+        message: '정기결제가 성공적으로 해지되었습니다.'
+      });
+    } else {
+      const errorMessage = responseData.get('errorMessage');
+      
+      console.error('PayApp 정기결제 해지 오류:', { state, errorMessage });
+      
+      res.status(400).json({
+        success: false,
+        message: errorMessage || '정기결제 해지에 실패했습니다.'
+      });
+    }
+  } catch (error) {
+    console.error('정기결제 해지 오류:', error);
+    res.status(500).json({
+      success: false,
+      message: '서버 내부 오류가 발생했습니다.'
+    });
+  }
+});
+
+// 정기결제 일시정지
+app.post('/api/payapp/rebill/stop', async (req, res) => {
+  try {
+    const { rebill_no } = req.body;
+    
+    if (!rebill_no) {
+      return res.status(400).json({
+        success: false,
+        message: '정기결제 등록번호(rebill_no)가 필요합니다.'
+      });
+    }
+
+    // PayApp 정기결제 일시정지 API 호출
+    const stopData = new URLSearchParams({
+      cmd: 'rebillStop',
+      userid: PAYAPP_CONFIG.USERID,
+      linkkey: PAYAPP_CONFIG.LINKKEY,
+      rebill_no: rebill_no
+    });
+
+    console.log('PayApp 정기결제 일시정지 요청:', stopData.toString());
+
+    const stopResponse = await axios.post(PAYAPP_CONFIG.API_URL, stopData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    const responseData = new URLSearchParams(stopResponse.data);
+    const state = responseData.get('state');
+    
+    if (state === '1') {
+      console.log('정기결제 일시정지 성공:', { rebill_no });
+      
+      res.json({
+        success: true,
+        message: '정기결제가 성공적으로 일시정지되었습니다.'
+      });
+    } else {
+      const errorMessage = responseData.get('errorMessage');
+      
+      console.error('PayApp 정기결제 일시정지 오류:', { state, errorMessage });
+      
+      res.status(400).json({
+        success: false,
+        message: errorMessage || '정기결제 일시정지에 실패했습니다.'
+      });
+    }
+  } catch (error) {
+    console.error('정기결제 일시정지 오류:', error);
+    res.status(500).json({
+      success: false,
+      message: '서버 내부 오류가 발생했습니다.'
+    });
+  }
+});
+
+// 정기결제 재시작
+app.post('/api/payapp/rebill/start', async (req, res) => {
+  try {
+    const { rebill_no } = req.body;
+    
+    if (!rebill_no) {
+      return res.status(400).json({
+        success: false,
+        message: '정기결제 등록번호(rebill_no)가 필요합니다.'
+      });
+    }
+
+    // PayApp 정기결제 재시작 API 호출
+    const startData = new URLSearchParams({
+      cmd: 'rebillStart',
+      userid: PAYAPP_CONFIG.USERID,
+      linkkey: PAYAPP_CONFIG.LINKKEY,
+      rebill_no: rebill_no
+    });
+
+    console.log('PayApp 정기결제 재시작 요청:', startData.toString());
+
+    const startResponse = await axios.post(PAYAPP_CONFIG.API_URL, startData, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+
+    const responseData = new URLSearchParams(startResponse.data);
+    const state = responseData.get('state');
+    
+    if (state === '1') {
+      console.log('정기결제 재시작 성공:', { rebill_no });
+      
+      res.json({
+        success: true,
+        message: '정기결제가 성공적으로 재시작되었습니다.'
+      });
+    } else {
+      const errorMessage = responseData.get('errorMessage');
+      
+      console.error('PayApp 정기결제 재시작 오류:', { state, errorMessage });
+      
+      res.status(400).json({
+        success: false,
+        message: errorMessage || '정기결제 재시작에 실패했습니다.'
+      });
+    }
+  } catch (error) {
+    console.error('정기결제 재시작 오류:', error);
+    res.status(500).json({
+      success: false,
+      message: '서버 내부 오류가 발생했습니다.'
+    });
+  }
+});
+
 // 서버 시작
 app.listen(PORT, () => {
   console.log(`🚀 PayApp Backend Server가 포트 ${PORT}에서 실행 중입니다.`);
@@ -288,9 +570,16 @@ app.listen(PORT, () => {
   console.log(`- PAYAPP_FEEDBACK_URL: ${process.env.PAYAPP_FEEDBACK_URL || '자동 설정'}`);
   
   console.log('\n📋 사용 가능한 API 엔드포인트:');
+  console.log('\n🔹 일반 결제:');
   console.log('  POST /api/payapp/request - PayApp 결제 요청');
   console.log('  POST /api/payapp/callback - PayApp 피드백 수신');
   console.log('  GET  /api/payapp/status/:orderId - 결제 상태 확인');
   console.log('  POST /api/payapp/cancel - 결제 취소');
+  console.log('\n🔹 정기결제:');
+  console.log('  POST /api/payapp/rebill/register - 정기결제 등록');
+  console.log('  POST /api/payapp/rebill/cancel - 정기결제 해지');
+  console.log('  POST /api/payapp/rebill/stop - 정기결제 일시정지');
+  console.log('  POST /api/payapp/rebill/start - 정기결제 재시작');
+  console.log('\n🔹 시스템:');
   console.log('  GET  /health - 서버 상태 확인');
 });
