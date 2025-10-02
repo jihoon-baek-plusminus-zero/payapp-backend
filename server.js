@@ -19,11 +19,11 @@ app.get('/', (req, res) => {
   res.json({
     message: 'PayApp Backend Server',
     version: '1.0.0',
+    status: 'running',
     endpoints: [
       'POST /api/payapp/request - 결제 요청',
       'POST /api/payapp/callback - PayApp 피드백',
       'GET /api/payapp/status/:orderId - 결제 상태 확인',
-      'GET /api/payapp/orders - 주문 목록 조회',
       'GET /health - 서버 상태 확인'
     ]
   });
@@ -87,8 +87,6 @@ app.post('/api/payapp/request', async (req, res) => {
       const payurl = responseData.get('payurl');
       const mul_no = responseData.get('mul_no');
       
-      // TODO: 데이터베이스에 주문 정보 저장
-      
       res.json({
         success: true,
         orderId: orderId,
@@ -119,8 +117,6 @@ app.post('/api/payapp/callback', async (req, res) => {
     const feedbackData = req.body;
     console.log('PayApp 피드백 수신:', feedbackData);
     
-    // TODO: 데이터베이스에 피드백 데이터 저장 및 주문 상태 업데이트
-    
     // PayApp에 SUCCESS 응답
     res.send('SUCCESS');
   } catch (error) {
@@ -134,36 +130,13 @@ app.get('/api/payapp/status/:orderId', async (req, res) => {
   try {
     const { orderId } = req.params;
     
-    // TODO: 데이터베이스에서 주문 정보 조회
-    
     res.json({
       orderId: orderId,
       status: 'pending',
-      message: '데이터베이스 연동 후 구현 예정'
+      message: '결제 상태 확인 기능 (추후 데이터베이스 연동 예정)'
     });
   } catch (error) {
     console.error('상태 확인 오류:', error);
-    res.status(500).json({
-      success: false,
-      message: '서버 내부 오류가 발생했습니다.'
-    });
-  }
-});
-
-// 주문 목록 조회 (관리용)
-app.get('/api/payapp/orders', async (req, res) => {
-  try {
-    // TODO: 데이터베이스에서 주문 목록 조회
-    
-    res.json({
-      orders: [],
-      total: 0,
-      page: 1,
-      limit: 10,
-      message: '데이터베이스 연동 후 구현 예정'
-    });
-  } catch (error) {
-    console.error('주문 목록 조회 오류:', error);
     res.status(500).json({
       success: false,
       message: '서버 내부 오류가 발생했습니다.'
