@@ -4,6 +4,9 @@ const bodyParser = require('body-parser');
 const axios = require('axios');
 require('dotenv').config();
 
+// Supabase 연동 모듈 추가
+const { syncAllProducts, getSyncStatus } = require('./railway-supabase-integration');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -173,7 +176,8 @@ app.post('/api/payapp/callback', async (req, res) => {
         break;
       case '4':
         console.log('결제 완료:', { mul_no, var1, var2 });
-        // 여기서 실제 결제 완료 처리 (DB 업데이트, 상품 배송 등)
+        // Supabase에 결제 완료 처리
+        await handlePaymentCompletion(feedbackData);
         break;
       case '8':
       case '32':
@@ -182,6 +186,8 @@ app.post('/api/payapp/callback', async (req, res) => {
       case '9':
       case '64':
         console.log('승인 취소:', { mul_no, var1, var2 });
+        // Supabase에 환불 처리
+        await handlePaymentRefund(feedbackData);
         break;
       case '10':
         console.log('결제 대기:', { mul_no, var1, var2 });
@@ -272,6 +278,95 @@ app.post('/api/payapp/cancel', async (req, res) => {
     });
   }
 });
+
+// ==================== Supabase 결제 처리 함수 ====================
+
+// 결제 완료 처리
+async function handlePaymentCompletion(feedbackData) {
+  try {
+    const { mul_no, var1, var2, goodprice } = feedbackData;
+    
+    // var1에서 사용자 ID와 상품 정보 추출 (예: "user_id:product_id")
+    const [userId, productId] = var1 ? var1.split(':') : [null, null];
+    
+    if (!userId || !productId) {
+      console.error('결제 완료 처리 실패: 사용자 ID 또는 상품 ID 누락', { var1 });
+      return;
+    }
+
+    // Supabase에 결제 내역 추가
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    // 결제 내역 삽입
+    const { data: paymentData, error: paymentError } = await supabase
+      .from('payments')
+      .insert({
+        user_id: userId,
+        product_id: productId,
+        product_type: productId === 'all_products' ? 'all_products' : 
+                     (productId.startsWith('notion_') ? 'notion_template' : 'goodnote_template'),
+        payment_id: mul_no,
+        amount: parseFloat(goodprice) || 0,
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        webhook_processed: true
+      });
+
+    if (paymentError) {
+      console.error('Supabase 결제 내역 삽입 실패:', paymentError);
+    } else {
+      console.log('Supabase 결제 완료 처리 성공:', { userId, productId, mul_no });
+    }
+
+  } catch (error) {
+    console.error('결제 완료 처리 오류:', error);
+  }
+}
+
+// 환불 처리
+async function handlePaymentRefund(feedbackData) {
+  try {
+    const { mul_no, var1 } = feedbackData;
+    
+    // var1에서 사용자 ID와 상품 정보 추출
+    const [userId, productId] = var1 ? var1.split(':') : [null, null];
+    
+    if (!userId || !productId) {
+      console.error('환불 처리 실패: 사용자 ID 또는 상품 ID 누락', { var1 });
+      return;
+    }
+
+    // Supabase 클라이언트
+    const { createClient } = require('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+
+    // 결제 내역을 환불 상태로 업데이트
+    const { error: updateError } = await supabase
+      .from('payments')
+      .update({
+        status: 'refunded',
+        refunded_at: new Date().toISOString(),
+        webhook_processed: true
+      })
+      .eq('payment_id', mul_no);
+
+    if (updateError) {
+      console.error('Supabase 환불 처리 실패:', updateError);
+    } else {
+      console.log('Supabase 환불 처리 성공:', { userId, productId, mul_no });
+    }
+
+  } catch (error) {
+    console.error('환불 처리 오류:', error);
+  }
+}
 
 // ==================== 정기결제 API ====================
 
@@ -555,6 +650,74 @@ app.post('/api/payapp/rebill/start', async (req, res) => {
   }
 });
 
+// ==================== Framer CMS 연동 API ====================
+
+// 상품 동기화 API
+app.post('/api/sync/products', async (req, res) => {
+  try {
+    const results = await syncAllProducts();
+    res.json({
+      success: true,
+      message: 'Product sync completed',
+      results: results
+    });
+  } catch (error) {
+    console.error('Product sync API error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 동기화 상태 조회 API
+app.get('/api/sync/status', async (req, res) => {
+  try {
+    const status = await getSyncStatus();
+    res.json({
+      success: true,
+      status: status
+    });
+  } catch (error) {
+    console.error('Sync status API error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// 특정 컬렉션 동기화 API
+app.post('/api/sync/collection/:collection', async (req, res) => {
+  try {
+    const { collection } = req.params;
+    
+    if (!['notion_templates', 'goodnote_templates'].includes(collection)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid collection name'
+      });
+    }
+    
+    const { fetchFramerCMSData, syncProductsToSupabase } = require('./railway-supabase-integration');
+    const products = await fetchFramerCMSData(collection);
+    const result = await syncProductsToSupabase(collection, products);
+    
+    res.json({
+      success: true,
+      message: `${collection} sync completed`,
+      result: result
+    });
+    
+  } catch (error) {
+    console.error('Collection sync API error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // 서버 시작
 app.listen(PORT, () => {
   console.log(`🚀 PayApp Backend Server가 포트 ${PORT}에서 실행 중입니다.`);
@@ -580,6 +743,10 @@ app.listen(PORT, () => {
   console.log('  POST /api/payapp/rebill/cancel - 정기결제 해지');
   console.log('  POST /api/payapp/rebill/stop - 정기결제 일시정지');
   console.log('  POST /api/payapp/rebill/start - 정기결제 재시작');
+  console.log('\n🔹 Framer CMS 연동:');
+  console.log('  POST /api/sync/products - 전체 상품 동기화');
+  console.log('  GET  /api/sync/status - 동기화 상태 조회');
+  console.log('  POST /api/sync/collection/:collection - 특정 컬렉션 동기화');
   console.log('\n🔹 시스템:');
   console.log('  GET  /health - 서버 상태 확인');
 });
