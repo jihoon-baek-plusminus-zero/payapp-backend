@@ -145,77 +145,8 @@ const getSyncStatus = async () => {
 };
 
 // =====================================================
-// 5. API 엔드포인트 추가 (기존 server.js에 추가)
+// 5. API 엔드포인트는 server.js에서 직접 구현됨
 // =====================================================
-
-/**
- * 기존 Railway server.js에 추가할 API 엔드포인트들
- */
-
-// 상품 동기화 API
-app.post('/api/sync/products', async (req, res) => {
-  try {
-    const results = await syncAllProducts();
-    res.json({
-      success: true,
-      message: 'Product sync completed',
-      results: results
-    });
-  } catch (error) {
-    console.error('Product sync API error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// 동기화 상태 조회 API
-app.get('/api/sync/status', async (req, res) => {
-  try {
-    const status = await getSyncStatus();
-    res.json({
-      success: true,
-      status: status
-    });
-  } catch (error) {
-    console.error('Sync status API error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// 특정 컬렉션 동기화 API
-app.post('/api/sync/collection/:collection', async (req, res) => {
-  try {
-    const { collection } = req.params;
-    
-    if (!['notion_templates', 'goodnote_templates'].includes(collection)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid collection name'
-      });
-    }
-    
-    const products = await fetchFramerCMSData(collection);
-    const result = await syncProductsToSupabase(collection, products);
-    
-    res.json({
-      success: true,
-      message: `${collection} sync completed`,
-      result: result
-    });
-    
-  } catch (error) {
-    console.error('Collection sync API error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
 
 // =====================================================
 // 6. 정기 동기화 스케줄 (선택사항)
